@@ -14,9 +14,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .annotations import DEFAULT_MARK_BGR, _mark_mask, read_labels
+from .annotations import DEFAULT_MARK_BGR, _mark_mask, read_boxes, read_labels
 from .notion import NotionThickness
-from .sampling import snap_sample
+from .sampling import sample_box, snap_sample
 from .store import CalibrationRecord, CalibrationStore
 
 
@@ -26,6 +26,7 @@ def build_from_mosaic(
     material: str,
     substrate: str,
     mode: str = "thickness",
+    style: str = "box",
     mark_bgr: tuple[int, int, int] = DEFAULT_MARK_BGR,
     chip: str = "",
     notion: NotionThickness | None = None,
@@ -33,6 +34,9 @@ def build_from_mosaic(
 ) -> int:
     """Add calibration records from an annotated mosaic; return the count added.
 
+    ``style="box"``: each flake is enclosed in a red box with a number label
+    (unambiguous — recommended). ``style="number"``: just a number typed next to
+    each flake (snapped to the nearest flake).
     ``mode="thickness"``: the label number IS the thickness (nm).
     ``mode="id"``: the label number is the flake-id number; thickness is looked
     up in ``notion`` using ``date`` and ``chip`` (id = ``f"{chip}{value}"``).
@@ -40,19 +44,19 @@ def build_from_mosaic(
     img = cv2.imread(str(image_path))
     if img is None:
         raise FileNotFoundError(f"cannot read image: {image_path}")
-    labels = read_labels(img, mark_bgr=mark_bgr)
     # dilate the annotation ink so its anti-aliased edges are excluded from sampling
     ink = cv2.dilate(_mark_mask(img, mark_bgr, tol=60), np.ones((7, 7), np.uint8))
+    marks = read_boxes(img, mark_bgr=mark_bgr) if style == "box" else read_labels(img, mark_bgr=mark_bgr)
 
     added = 0
-    for lab in labels:
+    for mk in marks:
         if mode == "thickness":
             flake_id = f"{chip}?" if chip else "?"
-            thickness = float(lab.value)
+            thickness = float(mk.value)
         elif mode == "id":
             if notion is None:
                 raise ValueError("mode='id' requires a Notion lookup")
-            flake_id = f"{chip}{lab.value}"
+            flake_id = f"{chip}{mk.value}"
             t = notion.get(date, flake_id)
             if t is None:
                 continue  # no AFM thickness on record for this flake
@@ -60,7 +64,10 @@ def build_from_mosaic(
         else:
             raise ValueError(f"unknown mode: {mode}")
 
-        res = snap_sample(img, lab.x, lab.y, exclude_mask=ink)
+        if style == "box":
+            res = sample_box(img, mk.x, mk.y, mk.w, mk.h, exclude_mask=ink)
+        else:
+            res = snap_sample(img, mk.x, mk.y, exclude_mask=ink)
         if res is None:
             continue
         flake, sub = res

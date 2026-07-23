@@ -32,6 +32,7 @@ def calibrate(
     db: Path = typer.Option(..., help="Calibration database CSV (created/appended)."),
     material: str = typer.Option(..., help="Material name, e.g. hBN."),
     substrate: str = typer.Option("SiO2-285nm", help="Substrate name."),
+    style: str = typer.Option("box", help="'box' (red box + number, recommended) or 'number'."),
     mode: str = typer.Option("thickness", help="'thickness' (label=nm) or 'id' (label=flake-id)."),
     chip: str = typer.Option("", help="Chip letter (for mode=id, and provenance)."),
     notion: Path = typer.Option(None, help="Notion CSV export (required for mode=id)."),
@@ -42,7 +43,7 @@ def calibrate(
     store = CalibrationStore(db)
     ntx = NotionThickness(notion) if notion else None
     added = build_from_mosaic(
-        image, store, material, substrate, mode=mode,
+        image, store, material, substrate, mode=mode, style=style,
         mark_bgr=_parse_bgr(mark_color), chip=chip, notion=ntx, date=date,
     )
     store.save()

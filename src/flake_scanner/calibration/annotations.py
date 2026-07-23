@@ -33,6 +33,19 @@ class Label:
     y: int
 
 
+@dataclass
+class BoxLabel:
+    """A red box the researcher drew around one flake, plus its number label."""
+
+    value: int  # OCR'd number (thickness nm or flake-id number, per mode)
+    cx: int  # box centre, pixels
+    cy: int
+    x: int  # box top-left, pixels
+    y: int
+    w: int  # box size, pixels
+    h: int
+
+
 def _mark_mask(img: np.ndarray, mark_bgr: tuple[int, int, int], tol: int) -> np.ndarray:
     lo = np.array([max(0, c - tol) for c in mark_bgr], np.uint8)
     hi = np.array([min(255, c + tol) for c in mark_bgr], np.uint8)
@@ -137,3 +150,76 @@ def read_labels(
             continue
         labels.append(Label(value=value, x=snapped[0], y=snapped[1]))
     return labels
+
+
+def read_boxes(
+    img: np.ndarray,
+    mark_bgr: tuple[int, int, int] = DEFAULT_MARK_BGR,
+    tol: int = 60,
+    min_box_px: int = 45,
+    cluster_dist: int = 90,
+) -> list[BoxLabel]:
+    """Detect red boxes drawn around flakes, OCR each box's number label.
+
+    A box is a large, hollow rectangular red component; number labels are the
+    remaining small red components, clustered and OCR'd, then paired to the
+    nearest box. Unambiguous vs typed numbers alone: the box says exactly which
+    flake and its extent, so there is no snap-to-nearest guessing. Returns one
+    ``BoxLabel`` per box that has a readable number nearby.
+    """
+    mask = _mark_mask(img, mark_bgr, tol)
+    n, _lab, stats, cent = cv2.connectedComponentsWithStats(mask)
+
+    boxes: list[tuple[int, int, int, int]] = []  # x, y, w, h
+    digit_pts: list[tuple[float, float, tuple]] = []
+    for i in range(1, n):
+        x, y, w, h, area = stats[i]
+        if min(w, h) >= min_box_px and area < 0.4 * w * h:  # large + hollow -> a box
+            boxes.append((int(x), int(y), int(w), int(h)))
+        elif area >= 20:
+            digit_pts.append((cent[i][0], cent[i][1], stats[i]))
+
+    # cluster digit strokes into numbers
+    numbers: list[tuple[int, int, int]] = []  # value, cx, cy
+    if digit_pts:
+        pts = np.array([[d[0], d[1]] for d in digit_pts])
+        used = [False] * len(digit_pts)
+        for i in range(len(digit_pts)):
+            if used[i]:
+                continue
+            grp = [i]
+            used[i] = True
+            changed = True
+            while changed:
+                changed = False
+                for j in range(len(digit_pts)):
+                    if not used[j] and any(
+                        np.hypot(*(pts[j] - pts[k])) < cluster_dist for k in grp
+                    ):
+                        grp.append(j)
+                        used[j] = True
+                        changed = True
+            gx0 = min(int(digit_pts[k][2][0]) for k in grp)
+            gy0 = min(int(digit_pts[k][2][1]) for k in grp)
+            gx1 = max(int(digit_pts[k][2][0] + digit_pts[k][2][2]) for k in grp)
+            gy1 = max(int(digit_pts[k][2][1] + digit_pts[k][2][3]) for k in grp)
+            pad = 6
+            glyph = mask[max(0, gy0 - pad) : gy1 + pad, max(0, gx0 - pad) : gx1 + pad]
+            value = _ocr_digits(cv2.bitwise_not(glyph))
+            if value is not None:
+                numbers.append((value, (gx0 + gx1) // 2, (gy0 + gy1) // 2))
+
+    out: list[BoxLabel] = []
+    for bx, by, bw, bh in boxes:
+        bcx, bcy = bx + bw // 2, by + bh // 2
+        # nearest number to this box centre
+        best, best_d = None, np.inf
+        for val, nx, ny in numbers:
+            d = np.hypot(nx - bcx, ny - bcy)
+            if d < best_d:
+                best, best_d = val, d
+        if best is None:
+            continue
+        out.append(BoxLabel(value=best, cx=bcx, cy=bcy, x=bx, y=by, w=bw, h=bh))
+    return out
+

@@ -136,3 +136,43 @@ def snap_sample(
         return None
     flake = win[lab == best].mean(axis=0)
     return flake, sub
+
+
+def sample_box(
+    img: np.ndarray,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    exclude_mask: np.ndarray | None = None,
+    color_thresh: float = 40.0,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Sample ``(flake_bgr, substrate_bgr)`` for a flake enclosed by a box.
+
+    Substrate is the median of a ring just outside the box; the flake is the
+    mean of the in-box pixels that differ from that substrate (i.e. the flake,
+    not any bare substrate the box also encloses), excluding ``exclude_mask``
+    ink pixels. Unambiguous — no blob picking or snap-to-neighbour needed.
+    """
+    ih, iw = img.shape[:2]
+    m = max(w, h) // 3 + 5
+    ox0, oy0 = max(0, x - m), max(0, y - m)
+    ox1, oy1 = min(iw, x + w + m), min(ih, y + h + m)
+    outer = img[oy0:oy1, ox0:ox1].astype(np.float32)
+    inner_rel = (slice(y - oy0, y - oy0 + h), slice(x - ox0, x - ox0 + w))
+    ring = np.ones(outer.shape[:2], bool)
+    ring[inner_rel] = False
+    if exclude_mask is not None:
+        ring &= exclude_mask[oy0:oy1, ox0:ox1] == 0
+    if ring.sum() < 10:
+        return None
+    sub = np.median(outer[ring].reshape(-1, 3), axis=0)
+
+    box = img[y : y + h, x : x + w].astype(np.float32)
+    keep = np.linalg.norm(box - sub, axis=2) > color_thresh
+    if exclude_mask is not None:
+        keep &= exclude_mask[y : y + h, x : x + w] == 0
+    if keep.sum() < 10:
+        return None
+    flake = box[keep].mean(axis=0)
+    return flake, sub

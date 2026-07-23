@@ -27,18 +27,21 @@ brew install tesseract && pip install pytesseract
 ## Usage
 
 **1. Calibrate** — teach it what your target flakes look like. In any image
-editor, type each AFM-measured flake's **thickness (nm)** next to it on the
-mosaic in a single designated colour (default pure red). Then:
+editor, **draw a red box tightly around each AFM-measured flake** and type its
+**thickness (nm)** next to the box, in a single designated colour (default pure
+red). Then:
 
 ```bash
 flake-scanner calibrate --image chipB_annotated.jpg --db calib.csv \
-    --material hBN --mode thickness --chip B
+    --material hBN --chip B          # --style box is the default
 ```
 
-It reads the numbers (OCR), samples each flake's colour in-domain, and appends
-to the calibration database. Repeat per chip — the database grows over time.
-(Alternatively `--mode id` reads flake-id numbers and joins thickness from a
-Notion CSV export via `--notion` / `--date`.)
+It detects the boxes, OCRs the numbers, and samples each flake's colour from
+inside its box (in-domain) — the box removes any ambiguity about which flake a
+number belongs to, which matters in dense clusters. Repeat per chip; the
+database grows over time. (`--style number` accepts a bare number snapped to the
+nearest flake if you prefer less drawing; `--mode id` reads flake-id numbers and
+joins thickness from a Notion CSV export via `--notion` / `--date`.)
 
 **2. Scan** — find matching flakes on a new mosaic:
 
