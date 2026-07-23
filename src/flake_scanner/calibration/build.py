@@ -31,8 +31,8 @@ def build_from_mosaic(
     chip: str = "",
     notion: NotionThickness | None = None,
     date: str = "",
-) -> int:
-    """Add calibration records from an annotated mosaic; return the count added.
+) -> list[float]:
+    """Add calibration records from an annotated mosaic; return the thicknesses added.
 
     ``style="box"``: each flake is enclosed in a red box with a number label
     (unambiguous — recommended). ``style="number"``: just a number typed next to
@@ -48,7 +48,7 @@ def build_from_mosaic(
     ink = cv2.dilate(_mark_mask(img, mark_bgr, tol=60), np.ones((7, 7), np.uint8))
     marks = read_boxes(img, mark_bgr=mark_bgr) if style == "box" else read_labels(img, mark_bgr=mark_bgr)
 
-    added = 0
+    added: list[float] = []
     for mk in marks:
         if mode == "thickness":
             flake_id = f"{chip}?" if chip else "?"
@@ -80,5 +80,5 @@ def build_from_mosaic(
                 source_image=str(image_path),
             )
         )
-        added += 1
+        added.append(thickness)
     return added

@@ -119,8 +119,14 @@ def scan_tab() -> None:
 def calibrate_tab() -> None:
     st.header("Add calibration flakes")
     st.caption(
-        "Draw a red box around each AFM-measured flake in your image editor and type "
-        "its thickness (nm) next to the box, then add it here."
+        "In your image editor, draw a red box around each AFM-measured flake and type "
+        "its thickness (nm) just above the box, then add it here."
+    )
+    st.info(
+        "Tips for reliable reading: use **thick box lines** (thin lines break up under "
+        "JPEG compression), keep the number **directly above** its box with a little gap, "
+        "and leave space between nearby flakes' labels. After adding, check the list of "
+        "thicknesses below matches your annotations — re-annotate any that were missed."
     )
     db = st.text_input("Calibration database", value="calib_hbn.csv", key="cal_db")
     c1, c2 = st.columns(2)
@@ -143,7 +149,13 @@ def calibrate_tab() -> None:
                 st.error(str(e))
                 return
         store.save()
-        st.success(f"Added {added} flakes → {db} ({len(store.records)} total).")
+        st.success(f"Added {len(added)} flakes → {db} ({len(store.records)} total).")
+        if added:
+            st.write("**Thicknesses read (nm):**", sorted(int(t) for t in added))
+        st.caption(
+            "Check this matches your annotated flakes. Any missing ones probably had "
+            "thin/broken box lines or crowded labels — thicken them and re-run."
+        )
 
 
 def main() -> None:

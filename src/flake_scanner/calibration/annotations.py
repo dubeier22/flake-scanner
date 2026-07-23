@@ -46,12 +46,26 @@ class BoxLabel:
     h: int
 
 
-def _mark_mask(img: np.ndarray, mark_bgr: tuple[int, int, int], tol: int) -> np.ndarray:
-    lo = np.array([max(0, c - tol) for c in mark_bgr], np.uint8)
-    hi = np.array([min(255, c + tol) for c in mark_bgr], np.uint8)
-    # a saturated pure-hue mark: require the marked channel high and others low
-    m = cv2.inRange(img, lo, hi)
-    return cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+def _mark_mask(img: np.ndarray, mark_bgr: tuple[int, int, int], tol: int = 60) -> np.ndarray:
+    """Robust mask of the annotation colour, tolerant of JPEG/anti-alias drift.
+
+    Detects by hue (generous saturation/value) so a hand-drawn colour still
+    registers, then closes small gaps so thin box lines form a connected
+    outline. ``tol`` is the hue half-window in degrees-ish (OpenCV hue units).
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    target_h = int(cv2.cvtColor(np.uint8([[mark_bgr]]), cv2.COLOR_BGR2HSV)[0, 0, 0])
+    ht = max(8, tol // 4)  # hue tolerance
+    ranges = [(max(0, target_h - ht), min(179, target_h + ht))]
+    if target_h - ht < 0:  # red wraps around 0/180
+        ranges.append((180 + (target_h - ht), 179))
+    if target_h + ht > 179:
+        ranges.append((0, (target_h + ht) - 180))
+    m = np.zeros(img.shape[:2], np.uint8)
+    for lo_h, hi_h in ranges:
+        m |= cv2.inRange(hsv, (lo_h, 70, 70), (hi_h, 255, 255))
+    # bridge breaks in thin/JPEG-fragmented lines without filling box interiors
+    return cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
 
 
 def _ocr_digits(glyph_img: np.ndarray) -> int | None:
@@ -156,8 +170,7 @@ def read_boxes(
     img: np.ndarray,
     mark_bgr: tuple[int, int, int] = DEFAULT_MARK_BGR,
     tol: int = 60,
-    min_box_px: int = 45,
-    cluster_dist: int = 90,
+    min_box_px: int = 60,
 ) -> list[BoxLabel]:
     """Detect red boxes drawn around flakes, OCR each box's number label.
 
@@ -168,58 +181,48 @@ def read_boxes(
     ``BoxLabel`` per box that has a readable number nearby.
     """
     mask = _mark_mask(img, mark_bgr, tol)
-    n, _lab, stats, cent = cv2.connectedComponentsWithStats(mask)
+    n, comp_lab, stats, cent = cv2.connectedComponentsWithStats(mask)
 
     boxes: list[tuple[int, int, int, int]] = []  # x, y, w, h
-    digit_pts: list[tuple[float, float, tuple]] = []
+    strokes: list[tuple[int, float, float, tuple]] = []  # comp_index, cx, cy, stats
     for i in range(1, n):
         x, y, w, h, area = stats[i]
-        if min(w, h) >= min_box_px and area < 0.4 * w * h:  # large + hollow -> a box
-            boxes.append((int(x), int(y), int(w), int(h)))
-        elif area >= 20:
-            digit_pts.append((cent[i][0], cent[i][1], stats[i]))
-
-    # cluster digit strokes into numbers
-    numbers: list[tuple[int, int, int]] = []  # value, cx, cy
-    if digit_pts:
-        pts = np.array([[d[0], d[1]] for d in digit_pts])
-        used = [False] * len(digit_pts)
-        for i in range(len(digit_pts)):
-            if used[i]:
+        if min(w, h) >= min_box_px:
+            # a box is a hollow rectangle: its central region holds little mark ink
+            interior = mask[y + h // 4 : y + 3 * h // 4, x + w // 4 : x + 3 * w // 4]
+            if interior.size and interior.mean() / 255 < 0.12:
+                boxes.append((int(x), int(y), int(w), int(h)))
                 continue
-            grp = [i]
-            used[i] = True
-            changed = True
-            while changed:
-                changed = False
-                for j in range(len(digit_pts)):
-                    if not used[j] and any(
-                        np.hypot(*(pts[j] - pts[k])) < cluster_dist for k in grp
-                    ):
-                        grp.append(j)
-                        used[j] = True
-                        changed = True
-            gx0 = min(int(digit_pts[k][2][0]) for k in grp)
-            gy0 = min(int(digit_pts[k][2][1]) for k in grp)
-            gx1 = max(int(digit_pts[k][2][0] + digit_pts[k][2][2]) for k in grp)
-            gy1 = max(int(digit_pts[k][2][1] + digit_pts[k][2][3]) for k in grp)
-            pad = 6
-            glyph = mask[max(0, gy0 - pad) : gy1 + pad, max(0, gx0 - pad) : gx1 + pad]
-            value = _ocr_digits(cv2.bitwise_not(glyph))
-            if value is not None:
-                numbers.append((value, (gx0 + gx1) // 2, (gy0 + gy1) // 2))
+        if area >= 20:
+            strokes.append((i, cent[i][0], cent[i][1], stats[i]))
 
     out: list[BoxLabel] = []
     for bx, by, bw, bh in boxes:
         bcx, bcy = bx + bw // 2, by + bh // 2
-        # nearest number to this box centre
-        best, best_d = None, np.inf
-        for val, nx, ny in numbers:
-            d = np.hypot(nx - bcx, ny - bcy)
-            if d < best_d:
-                best, best_d = val, d
-        if best is None:
+        # the number is written above the box (roughly x-aligned); search a band
+        # there, generous vertically to cover the large fixed-size font.
+        rx0, rx1 = bx - bw * 0.6, bx + bw * 1.6
+        ry0, ry1 = by - max(bh * 2.5, 380), by + bh * 0.25
+        near = [s for s in strokes if rx0 <= s[1] <= rx1 and ry0 <= s[2] <= ry1]
+        if not near:  # fall back to any strokes close to the box
+            near = [
+                s for s in strokes if np.hypot(s[1] - bcx, s[2] - bcy) < 1.5 * max(bw, bh)
+            ]
+        if not near:
             continue
-        out.append(BoxLabel(value=best, cx=bcx, cy=bcy, x=bx, y=by, w=bw, h=bh))
+        gx0 = min(int(s[3][0]) for s in near)
+        gy0 = min(int(s[3][1]) for s in near)
+        gx1 = max(int(s[3][0] + s[3][2]) for s in near)
+        gy1 = max(int(s[3][1] + s[3][3]) for s in near)
+        pad = 8
+        # isolate just these strokes (drop any box-outline ink caught in the crop)
+        sub = np.zeros_like(mask[max(0, gy0 - pad) : gy1 + pad, max(0, gx0 - pad) : gx1 + pad])
+        y_off, x_off = max(0, gy0 - pad), max(0, gx0 - pad)
+        for s in near:
+            sub[comp_lab[y_off : gy1 + pad, x_off : gx1 + pad] == s[0]] = 255
+        value = _ocr_digits(cv2.bitwise_not(sub))
+        if value is None:
+            continue
+        out.append(BoxLabel(value=value, cx=bcx, cy=bcy, x=bx, y=by, w=bw, h=bh))
     return out
 

@@ -49,7 +49,11 @@ def calibrate(
         mark_bgr=_parse_bgr(mark_color), chip=chip, notion=ntx, date=date,
     )
     store.save()
-    typer.echo(f"Added {added} calibration flakes -> {db} ({len(store.records)} total).")
+    typer.echo(f"Added {len(added)} calibration flakes -> {db} ({len(store.records)} total).")
+    if added:
+        typer.echo(f"Thicknesses read: {sorted(int(t) for t in added)}")
+    typer.echo("Verify this matches your annotations; re-annotate any missed flakes "
+               "(thicker box lines read more reliably) and run again.")
 
 
 @app.command()

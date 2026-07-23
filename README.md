@@ -39,9 +39,10 @@ locally, so full-resolution mosaics never leave your machine.
 ## Command-line usage
 
 **1. Calibrate** — teach it what your target flakes look like. In any image
-editor, **draw a red box tightly around each AFM-measured flake** and type its
-**thickness (nm)** next to the box, in a single designated colour (default pure
-red). Then:
+editor, **draw a red box around each AFM-measured flake** (use **thick lines** —
+thin ones break up under JPEG compression) and type its **thickness (nm)** just
+**above** the box, in a single designated colour (default pure red). Give nearby
+flakes' labels some breathing room. Then:
 
 ```bash
 flake-scanner calibrate --image chipB_annotated.jpg --db calib.csv \
