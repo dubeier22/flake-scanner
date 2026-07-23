@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ocr = ["pytesseract"]  # digital-label calibration input (needs the tesseract binary)
+ui = ["streamlit"]  # the `flake-scanner ui` web interface
 dev = ["ruff", "mypy", "pytest"]
 
 [project.scripts]

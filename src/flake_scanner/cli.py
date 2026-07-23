@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import cv2
@@ -75,6 +77,17 @@ def scan(
     write_csv(cands, out / f"{stem}_candidates.csv")
     write_map(img, cands, out / f"{stem}_candidate_map.jpg")
     typer.echo(f"{len(cands)} candidates -> {out}/{stem}_candidates.csv + _candidate_map.jpg")
+
+
+@app.command()
+def ui() -> None:
+    """Launch the local web interface (Scan / Calibrate) in your browser."""
+    app_path = Path(__file__).with_name("app.py")
+    try:
+        subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path)], check=True)
+    except FileNotFoundError:
+        typer.echo("Streamlit is not installed. Run: pip install streamlit")
+        raise typer.Exit(1) from None
 
 
 if __name__ == "__main__":

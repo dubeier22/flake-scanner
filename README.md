@@ -24,7 +24,19 @@ pip install -e .
 brew install tesseract && pip install pytesseract
 ```
 
-## Usage
+## Web interface (easiest)
+
+```bash
+pip install streamlit
+flake-scanner ui
+```
+
+Opens a local app in your browser with two tabs: **Scan** (pick a material +
+thickness range, choose a mosaic, get the ranked candidate map + table) and
+**Calibrate** (add flakes from a boxed/annotated mosaic). Everything runs
+locally, so full-resolution mosaics never leave your machine.
+
+## Command-line usage
 
 **1. Calibrate** — teach it what your target flakes look like. In any image
 editor, **draw a red box tightly around each AFM-measured flake** and type its
