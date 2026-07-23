@@ -14,10 +14,10 @@ import cv2
 import pandas as pd
 import streamlit as st
 
-from .calibration.build import build_from_mosaic
-from .calibration.store import CalibrationStore
-from .detection.scan import scan as scan_mosaic
-from .io.report import write_csv, write_map
+from flake_scanner.calibration.build import build_from_mosaic
+from flake_scanner.calibration.store import CalibrationStore
+from flake_scanner.detection.scan import scan as scan_mosaic
+from flake_scanner.io.report import write_csv, write_map
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
 
