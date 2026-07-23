@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flake-scanner"
+version = "0.2.0"
+description = "Material-agnostic detection of 2D-material flakes in microscope mosaics"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "pandas",
+    "typer",
+    "scikit-image",
+]
+
+[project.optional-dependencies]
+ocr = ["pytesseract"]  # digital-label calibration input (needs the tesseract binary)
+dev = ["ruff", "mypy", "pytest"]
+
+[project.scripts]
+flake-scanner = "flake_scanner.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
