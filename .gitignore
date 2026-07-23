@@ -1,0 +1,38 @@
+# OS
+.DS_Store
+
+# Python environment / cache (conda env itself lives outside the repo)
+__pycache__/
+*.pyc
+.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Raw microscope images & mosaics — large binary data, not stored in git
+MicroscopeImages/
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+!tests/**/*.png
+!tests/**/*.jpg
+
+# Dated data-collection folders (e.g. 2026_07_07/)
+[0-9][0-9][0-9][0-9]_[0-9][0-9]_[0-9][0-9]/
+
+# Generated scan outputs (regenerate by re-running scan mode)
+candidates.csv
+scan_results/
+
+# Raw exported lab data (kept locally, not in the code repo)
+Notion/
+Full Chips/
+
+# Vendored copy of the TRIP workflow (not part of this project's deliverable)
+TRIP-workflow-master/
+
+# Per-user / transient Claude Code config
+.claude/settings.local.json
+.claude/skills/*/state/
