@@ -62,7 +62,7 @@ def _pick_image(label: str, key: str) -> str | None:
 
 def scan_tab() -> None:
     st.header("Scan a mosaic")
-    db = st.text_input("Calibration database", value="calib_hbn.csv", key="scan_db")
+    db = st.text_input("Calibration database", value="calibration.csv", key="scan_db")
     mats = _materials(db)
     if not mats:
         st.warning(f"No calibration database at '{db}'. Add flakes in the Calibrate tab first.")
@@ -125,7 +125,7 @@ def calibrate_tab() -> None:
         "connecting lines). Two colours keep the box and number from interfering. Enter "
         "the matching thicknesses below."
     )
-    db = st.text_input("Calibration database", value="calib_hbn.csv", key="cal_db")
+    db = st.text_input("Calibration database", value="calibration.csv", key="cal_db")
     c1, c2, c3, c4 = st.columns(4)
     material = c1.text_input("Material", value="HBN")
     date = c2.text_input("Date (YYYY_MM_DD)", value="2026_07_07")

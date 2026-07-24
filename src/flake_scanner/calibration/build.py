@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
+import numpy as np
 
-from .annotations import FlakeAnnotation, read_flake_annotations
+from .annotations import BLUE_BGR, MAGENTA_BGR, FlakeAnnotation, ink_mask, read_flake_annotations
 from .sampling import sample_box
 from .store import CalibrationRecord, CalibrationStore, flake_id
 
@@ -59,12 +60,17 @@ def build_from_id_mosaic(
     if annotations is None:
         annotations = read_flake_annotations(img)
 
+    # exclude annotation ink (magenta box + blue number) from colour sampling, so
+    # the box outline can't tint the flake colour. Dilate to catch anti-aliasing.
+    ink = ink_mask(img, MAGENTA_BGR) | ink_mask(img, BLUE_BGR, min_sat=140)
+    ink = cv2.dilate(ink, np.ones((7, 7), np.uint8))
+
     results: list[BuiltFlake] = []
     for ann in annotations:
         t = thicknesses.get(ann.flake_id) if ann.flake_id is not None else None
         added = False
         if t is not None:
-            res = sample_box(img, ann.x, ann.y, ann.w, ann.h)
+            res = sample_box(img, ann.x, ann.y, ann.w, ann.h, exclude_mask=ink)
             if res is not None:
                 flake, sub = res
                 fid = flake_id(material, date, chip, ann.flake_id)
