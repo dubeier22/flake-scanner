@@ -14,8 +14,7 @@ from pathlib import Path
 import cv2
 import typer
 
-from .calibration.build import build_from_mosaic
-from .calibration.notion import NotionThickness
+from .calibration.build import build_from_id_mosaic
 from .calibration.store import CalibrationStore
 from .detection.scan import scan as scan_mosaic
 from .io.report import write_csv, write_map
@@ -23,37 +22,35 @@ from .io.report import write_csv, write_map
 app = typer.Typer(add_completion=False, help="Detect 2D-material flakes in microscope mosaics.")
 
 
-def _parse_bgr(s: str) -> tuple[int, int, int]:
-    b, g, r = (int(v) for v in s.split(","))
-    return (b, g, r)
+def _parse_thicknesses(s: str) -> dict[int, float]:
+    """'25,26,34' -> {1: 25.0, 2: 26.0, 3: 34.0} (position = flake ID)."""
+    return {i: float(v) for i, v in enumerate(s.split(","), start=1) if v.strip()}
 
 
 @app.command()
 def calibrate(
-    image: Path = typer.Option(..., help="Annotated mosaic (numbers typed in the mark colour)."),
+    image: Path = typer.Option(..., help="Mosaic annotated with magenta box + ID per flake."),
     db: Path = typer.Option(..., help="Calibration database CSV (created/appended)."),
-    material: str = typer.Option(..., help="Material name, e.g. hBN."),
+    material: str = typer.Option(..., help="Material, e.g. HBN."),
+    date: str = typer.Option(..., help="Exfoliation date, YYYY_MM_DD, e.g. 2026_07_07."),
+    chip: str = typer.Option(..., help="Chip letter, e.g. A."),
+    thicknesses: str = typer.Option(
+        ..., help="Comma-separated thicknesses (nm) in flake-ID order: t1,t2,...,tN."
+    ),
     substrate: str = typer.Option("SiO2-285nm", help="Substrate name."),
-    style: str = typer.Option("box", help="'box' (red box + number, recommended) or 'number'."),
-    mode: str = typer.Option("thickness", help="'thickness' (label=nm) or 'id' (label=flake-id)."),
-    chip: str = typer.Option("", help="Chip letter (for mode=id, and provenance)."),
-    notion: Path = typer.Option(None, help="Notion CSV export (required for mode=id)."),
-    date: str = typer.Option("", help="Date key YYYY_MM_DD (for mode=id Notion lookup)."),
-    mark_color: str = typer.Option("0,0,255", help="Mark colour as B,G,R (default pure red)."),
 ) -> None:
-    """Add calibration flakes by reading typed number labels off an annotated mosaic."""
+    """Add calibration flakes from a magenta-annotated mosaic (ID box + thickness list)."""
     store = CalibrationStore(db)
-    ntx = NotionThickness(notion) if notion else None
-    added = build_from_mosaic(
-        image, store, material, substrate, mode=mode, style=style,
-        mark_bgr=_parse_bgr(mark_color), chip=chip, notion=ntx, date=date,
-    )
+    tmap = _parse_thicknesses(thicknesses)
+    results = build_from_id_mosaic(image, store, material, date, chip, substrate, tmap)
     store.save()
-    typer.echo(f"Added {len(added)} calibration flakes -> {db} ({len(store.records)} total).")
-    if added:
-        typer.echo(f"Thicknesses read: {sorted(int(t) for t in added)}")
-    typer.echo("Verify this matches your annotations; re-annotate any missed flakes "
-               "(thicker box lines read more reliably) and run again.")
+    added = [r for r in results if r.added]
+    typer.echo(f"Added {len(added)} flakes -> {db} ({len(store.records)} total).")
+    read_ids = sorted(r.id_number for r in results if r.id_number is not None)
+    typer.echo(f"Read flake IDs: {read_ids}  (expected 1..{len(tmap)})")
+    missing = sorted(set(tmap) - set(read_ids))
+    if missing:
+        typer.echo(f"NOT read (re-annotate or check): IDs {missing}")
 
 
 @app.command()

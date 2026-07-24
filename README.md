@@ -39,22 +39,22 @@ locally, so full-resolution mosaics never leave your machine.
 ## Command-line usage
 
 **1. Calibrate** — teach it what your target flakes look like. In any image
-editor, **draw a red box around each AFM-measured flake** (use **thick lines** —
-thin ones break up under JPEG compression) and type its **thickness (nm)** just
-**above** the box, in a single designated colour (default pure red). Give nearby
-flakes' labels some breathing room. Then:
+editor, **draw a magenta (#FF00FF) box around each AFM-measured flake** and
+write a magenta **flake-ID number** (1, 2, 3, …) next to it — no connecting
+leader lines. Magenta is used because it is absent from the samples themselves
+(flakes are yellow/green/red/pink), so it isolates cleanly; red clashes with
+reddish flakes. Supply the thicknesses separately, in flake-ID order:
 
 ```bash
-flake-scanner calibrate --image chipB_annotated.jpg --db calib.csv \
-    --material hBN --chip B          # --style box is the default
+flake-scanner calibrate --image chipA_annotated.jpg --db calib.csv \
+    --material HBN --date 2026_07_07 --chip A \
+    --thicknesses 120,97,250,105,115,25,34,113,26,34,109,108
 ```
 
-It detects the boxes, OCRs the numbers, and samples each flake's colour from
-inside its box (in-domain) — the box removes any ambiguity about which flake a
-number belongs to, which matters in dense clusters. Repeat per chip; the
-database grows over time. (`--style number` accepts a bare number snapped to the
-nearest flake if you prefer less drawing; `--mode id` reads flake-id numbers and
-joins thickness from a Notion CSV export via `--notion` / `--date`.)
+It locates each flake, reads its ID, joins the matching thickness, samples the
+colour, and writes records with uniform IDs like `HBN_2026_07_07_A01`
+(re-importing a chip updates rather than duplicates). The **web UI** shows a
+verification preview so you can correct any misread ID before saving.
 
 **2. Scan** — find matching flakes on a new mosaic:
 

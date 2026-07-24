@@ -14,7 +14,8 @@ import cv2
 import pandas as pd
 import streamlit as st
 
-from flake_scanner.calibration.build import build_from_mosaic
+from flake_scanner.calibration.annotations import FlakeAnnotation, annotate_preview
+from flake_scanner.calibration.build import build_from_id_mosaic, read_annotations
 from flake_scanner.calibration.store import CalibrationStore
 from flake_scanner.detection.scan import scan as scan_mosaic
 from flake_scanner.io.report import write_csv, write_map
@@ -119,43 +120,57 @@ def scan_tab() -> None:
 def calibrate_tab() -> None:
     st.header("Add calibration flakes")
     st.caption(
-        "In your image editor, draw a red box around each AFM-measured flake and type "
-        "its thickness (nm) just above the box, then add it here."
-    )
-    st.info(
-        "Tips for reliable reading: use **thick box lines** (thin lines break up under "
-        "JPEG compression), keep the number **directly above** its box with a little gap, "
-        "and leave space between nearby flakes' labels. After adding, check the list of "
-        "thicknesses below matches your annotations — re-annotate any that were missed."
+        "In your image editor, draw a **magenta** box around each AFM-measured flake and "
+        "write its **flake-ID number** (1, 2, 3, …) next to the box (no connecting lines). "
+        "Enter the matching thicknesses below."
     )
     db = st.text_input("Calibration database", value="calib_hbn.csv", key="cal_db")
-    c1, c2 = st.columns(2)
-    material = c1.text_input("Material", value="hBN")
-    substrate = c2.text_input("Substrate", value="SiO2-285nm")
-    c3, c4 = st.columns(2)
-    chip = c3.text_input("Chip letter (provenance)", value="")
-    style = c4.selectbox("Annotation style", ["box", "number"])
-
+    c1, c2, c3, c4 = st.columns(4)
+    material = c1.text_input("Material", value="HBN")
+    date = c2.text_input("Date (YYYY_MM_DD)", value="2026_07_07")
+    chip = c3.text_input("Chip letter", value="A")
+    substrate = c4.text_input("Substrate", value="SiO2-285nm")
+    thick_str = st.text_input(
+        "Thicknesses (nm), comma-separated in flake-ID order (flake 1, 2, …)",
+        placeholder="e.g. 25,26,250,105,…",
+    )
     image = _pick_image("Annotated mosaic", "cal")
 
-    if st.button("Add calibration flakes", type="primary") and image:
-        store = CalibrationStore(db)
-        with st.spinner("Reading labels and sampling flakes…"):
+    if st.button("Read flakes from map", type="primary") and image:
+        with st.spinner("Reading magenta annotations…"):
             try:
-                added = build_from_mosaic(
-                    image, store, material, substrate, mode="thickness", style=style, chip=chip
-                )
+                anns = read_annotations(image)
             except RuntimeError as e:
                 st.error(str(e))
                 return
-        store.save()
-        st.success(f"Added {len(added)} flakes → {db} ({len(store.records)} total).")
-        if added:
-            st.write("**Thicknesses read (nm):**", sorted(int(t) for t in added))
-        st.caption(
-            "Check this matches your annotated flakes. Any missing ones probably had "
-            "thin/broken box lines or crowded labels — thicken them and re-run."
-        )
+        st.session_state["cal_anns"] = [(a.flake_id, a.x, a.y) for a in anns]
+        st.session_state["cal_image"] = image
+
+    anns_state = st.session_state.get("cal_anns")
+    if anns_state and st.session_state.get("cal_image") == image:
+        anns = [FlakeAnnotation(fid, x, y) for fid, x, y in anns_state]
+        st.write(f"**Detected {len(anns)} flakes.** Check/fix the IDs, then save.")
+        st.image(annotate_preview(cv2.imread(image), anns), caption="Detected flakes (ID shown)",
+                 use_container_width=True)
+        df = pd.DataFrame([{"detected_id": a.flake_id, "x": a.x, "y": a.y} for a in anns])
+        edited = st.data_editor(df, use_container_width=True, hide_index=True, key="cal_edit",
+                                column_config={"x": None, "y": None})
+        if st.button("Save to database", type="primary"):
+            tmap = {i: float(v) for i, v in enumerate(thick_str.split(","), 1) if v.strip()}
+            fixed = [
+                FlakeAnnotation(int(r["detected_id"]) if pd.notna(r["detected_id"]) else None,
+                                int(r["x"]), int(r["y"]))
+                for _, r in edited.iterrows()
+            ]
+            store = CalibrationStore(db)
+            results = build_from_id_mosaic(image, store, material, date, chip, substrate, tmap, fixed)
+            store.save()
+            added = [r for r in results if r.added]
+            st.success(f"Added/updated {len(added)} flakes → {db} ({len(store.records)} total).")
+            missing = sorted(set(tmap) - {r.id_number for r in results if r.added})
+            if missing:
+                st.warning(f"No flake saved for IDs {missing} — fix the ID or thickness list.")
+            st.session_state.pop("cal_anns", None)
 
 
 def main() -> None:

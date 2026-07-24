@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: flake-scanner
+Version: 0.2.0
+Summary: Material-agnostic detection of 2D-material flakes in microscope mosaics
+Requires-Python: >=3.11
+Requires-Dist: numpy
+Requires-Dist: opencv-python
+Requires-Dist: pandas
+Requires-Dist: typer
+Requires-Dist: scikit-image
+Provides-Extra: ocr
+Requires-Dist: pytesseract; extra == "ocr"
+Provides-Extra: dev
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: pytest; extra == "dev"

@@ -1,84 +1,82 @@
-"""Build calibration records from a digitally-labelled mosaic.
+"""Build calibration records from a magenta box+ID annotated mosaic.
 
-Reads the coloured number labels off an annotated mosaic (see
-``annotations.read_labels``), samples each flake's colour in-domain, and writes
-calibration records. The label number is interpreted as the thickness directly
-(``mode="thickness"``) or as a flake-id number joined to Notion for thickness
-(``mode="id"``).
+Reads the flake annotations (see ``annotations.read_flake_annotations``),
+joins each flake's ID to a thickness the user supplies separately (the number
+on the map is the flake ID, not the thickness), samples the flake colour, and
+writes records with uniform flake IDs (e.g. ``HBN_2026_07_07_A01``).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
-import numpy as np
 
-from .annotations import DEFAULT_MARK_BGR, _mark_mask, read_boxes, read_labels
-from .notion import NotionThickness
-from .sampling import sample_box, snap_sample
-from .store import CalibrationRecord, CalibrationStore
+from .annotations import FlakeAnnotation, read_flake_annotations
+from .sampling import snap_sample
+from .store import CalibrationRecord, CalibrationStore, flake_id
 
 
-def build_from_mosaic(
+@dataclass
+class BuiltFlake:
+    """Result for one annotated flake (for the verification report)."""
+
+    id_number: int | None
+    x: int
+    y: int
+    thickness: float | None
+    added: bool
+
+
+def read_annotations(image_path: str | Path) -> list[FlakeAnnotation]:
+    """Read flake annotations from a mosaic (for the verification preview)."""
+    img = cv2.imread(str(image_path))
+    if img is None:
+        raise FileNotFoundError(f"cannot read image: {image_path}")
+    return read_flake_annotations(img)
+
+
+def build_from_id_mosaic(
     image_path: str | Path,
     store: CalibrationStore,
     material: str,
+    date: str,
+    chip: str,
     substrate: str,
-    mode: str = "thickness",
-    style: str = "box",
-    mark_bgr: tuple[int, int, int] = DEFAULT_MARK_BGR,
-    chip: str = "",
-    notion: NotionThickness | None = None,
-    date: str = "",
-) -> list[float]:
-    """Add calibration records from an annotated mosaic; return the thicknesses added.
+    thicknesses: dict[int, float],
+    annotations: list[FlakeAnnotation] | None = None,
+) -> list[BuiltFlake]:
+    """Add calibration records from an annotated mosaic; return per-flake results.
 
-    ``style="box"``: each flake is enclosed in a red box with a number label
-    (unambiguous — recommended). ``style="number"``: just a number typed next to
-    each flake (snapped to the nearest flake).
-    ``mode="thickness"``: the label number IS the thickness (nm).
-    ``mode="id"``: the label number is the flake-id number; thickness is looked
-    up in ``notion`` using ``date`` and ``chip`` (id = ``f"{chip}{value}"``).
+    ``thicknesses`` maps flake-ID number -> thickness (nm). ``annotations`` may
+    be supplied (e.g. after the user corrected IDs in the UI); otherwise they
+    are read from the image.
     """
     img = cv2.imread(str(image_path))
     if img is None:
         raise FileNotFoundError(f"cannot read image: {image_path}")
-    # dilate the annotation ink so its anti-aliased edges are excluded from sampling
-    ink = cv2.dilate(_mark_mask(img, mark_bgr, tol=60), np.ones((7, 7), np.uint8))
-    marks = read_boxes(img, mark_bgr=mark_bgr) if style == "box" else read_labels(img, mark_bgr=mark_bgr)
+    if annotations is None:
+        annotations = read_flake_annotations(img)
 
-    added: list[float] = []
-    for mk in marks:
-        if mode == "thickness":
-            flake_id = f"{chip}?" if chip else "?"
-            thickness = float(mk.value)
-        elif mode == "id":
-            if notion is None:
-                raise ValueError("mode='id' requires a Notion lookup")
-            flake_id = f"{chip}{mk.value}"
-            t = notion.get(date, flake_id)
-            if t is None:
-                continue  # no AFM thickness on record for this flake
-            thickness = t
-        else:
-            raise ValueError(f"unknown mode: {mode}")
-
-        if style == "box":
-            res = sample_box(img, mk.x, mk.y, mk.w, mk.h, exclude_mask=ink)
-        else:
-            res = snap_sample(img, mk.x, mk.y, exclude_mask=ink)
-        if res is None:
-            continue
-        flake, sub = res
-        store.add(
-            CalibrationRecord(
-                material=material, substrate=substrate, chip=chip, flake_id=flake_id,
-                thickness_nm=thickness,
-                flake_b=float(flake[0]), flake_g=float(flake[1]), flake_r=float(flake[2]),
-                sub_b=float(sub[0]), sub_g=float(sub[1]), sub_r=float(sub[2]),
-                source_image=str(image_path),
-            )
-        )
-        added.append(thickness)
-    return added
+    results: list[BuiltFlake] = []
+    for ann in annotations:
+        t = thicknesses.get(ann.flake_id) if ann.flake_id is not None else None
+        added = False
+        if t is not None:
+            res = snap_sample(img, ann.x, ann.y)
+            if res is not None:
+                flake, sub = res
+                fid = flake_id(material, date, chip, ann.flake_id)
+                store.add(
+                    CalibrationRecord(
+                        material=material.upper(), substrate=substrate,
+                        chip=chip.upper(), flake_id=fid, thickness_nm=t,
+                        flake_b=float(flake[0]), flake_g=float(flake[1]), flake_r=float(flake[2]),
+                        sub_b=float(sub[0]), sub_g=float(sub[1]), sub_r=float(sub[2]),
+                        source_image=str(image_path),
+                    )
+                )
+                added = True
+        results.append(BuiltFlake(ann.flake_id, ann.x, ann.y, t, added))
+    return results

@@ -1,0 +1,2 @@
+[console_scripts]
+flake-scanner = flake_scanner.cli:app

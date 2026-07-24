@@ -1,0 +1,13 @@
+numpy
+opencv-python
+pandas
+typer
+scikit-image
+
+[dev]
+ruff
+mypy
+pytest
+
+[ocr]
+pytesseract

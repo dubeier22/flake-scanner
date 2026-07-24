@@ -34,6 +34,16 @@ FIELDS = [
 ]
 
 
+def chip_id(material: str, date: str, chip: str) -> str:
+    """Uniform chip identifier, e.g. HBN_2026_07_07_A."""
+    return f"{material.upper()}_{date}_{chip.upper()}"
+
+
+def flake_id(material: str, date: str, chip: str, n: int) -> str:
+    """Uniform flake identifier, e.g. HBN_2026_07_07_A01."""
+    return f"{chip_id(material, date, chip)}{n:02d}"
+
+
 @dataclass
 class CalibrationRecord:
     material: str
@@ -87,6 +97,8 @@ class CalibrationStore:
                 )
 
     def add(self, rec: CalibrationRecord) -> None:
+        """Add or update a record; flake_id is the unique key (no duplicates)."""
+        self.records = [r for r in self.records if r.flake_id != rec.flake_id]
         self.records.append(rec)
 
     def save(self) -> None:
