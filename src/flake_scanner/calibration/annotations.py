@@ -28,11 +28,21 @@ MAGENTA_BGR = (255, 0, 255)
 
 @dataclass
 class FlakeAnnotation:
-    """One detected flake: its OCR'd ID (or None) and pixel location."""
+    """One detected flake: its OCR'd ID and the box drawn around it."""
 
     flake_id: int | None
-    x: int
+    x: int  # box top-left
     y: int
+    w: int  # box size
+    h: int
+
+    @property
+    def cx(self) -> int:
+        return self.x + self.w // 2
+
+    @property
+    def cy(self) -> int:
+        return self.y + self.h // 2
 
 
 def _import_pytesseract():
@@ -82,76 +92,82 @@ def _ocr_id(number_crop: np.ndarray, pytesseract) -> int | None:
     return None
 
 
+def detect_boxes(
+    img: np.ndarray,
+    mark_bgr: tuple[int, int, int] = MAGENTA_BGR,
+    min_box: int = 30,
+    max_box: int = 320,
+) -> list[tuple[int, int, int, int]]:
+    """Detect the magenta bounding boxes as ``(x, y, w, h)`` rectangles.
+
+    HSV-filters the mark colour, reconnects fragmented lines, finds contours,
+    and keeps the rectangular, hollow, box-sized ones (a box is hollow because
+    the flake sits inside it). Nested/overlapping detections are deduped to the
+    innermost (tightest) box per flake.
+    """
+    ink = ink_mask(img, mark_bgr)
+    gsub = np.median(img[::40, ::40].reshape(-1, 3), axis=0).astype(np.float32)
+    closed = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    cnts, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    cands: list[tuple[int, int, int, int]] = []
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if not (min_box <= min(w, h) and max(w, h) < max_box and 0.35 < w / h < 2.8):
+            continue
+        approx = cv2.approxPolyDP(c, 0.04 * cv2.arcLength(c, True), True)
+        interior_ink = ink[y + h // 4 : y + 3 * h // 4, x + w // 4 : x + 3 * w // 4]
+        if not (4 <= len(approx) <= 8 and interior_ink.size and interior_ink.mean() / 255 < 0.25):
+            continue
+        # a real box has a flake inside it (a colour that differs from substrate,
+        # and isn't the mark ink); this drops number-regions mis-read as boxes
+        roi = img[y : y + h, x : x + w].astype(np.float32)
+        flake_px = int(((np.linalg.norm(roi - gsub, axis=2) > 45) & (ink[y : y + h, x : x + w] == 0)).sum())
+        if flake_px < 40:
+            continue
+        cands.append((flake_px, int(x), int(y), int(w), int(h)))
+    # among overlapping candidates keep the one enclosing the most flake
+    cands.sort(key=lambda b: -b[0])
+    boxes: list[tuple[int, int, int, int]] = []
+    for _fp, x, y, w, h in cands:
+        bcx, bcy = x + w // 2, y + h // 2
+        if not any(abs(bcx - (k[0] + k[2] // 2)) < 250 and abs(bcy - (k[1] + k[3] // 2)) < 250 for k in boxes):
+            boxes.append((x, y, w, h))
+    return boxes
+
+
 def read_flake_annotations(
     img: np.ndarray,
     mark_bgr: tuple[int, int, int] = MAGENTA_BGR,
-    cluster_dilate: int = 80,
-    color_thresh: float = 45.0,
 ) -> list[FlakeAnnotation]:
-    """Locate each annotated flake and OCR its ID.
+    """Detect each magenta box and OCR the ID number written above it.
 
-    Clusters the magenta ink per flake (box + number), finds the flake blob
-    inside each cluster, and OCRs the ID. Returns one ``FlakeAnnotation`` per
-    flake found; ``flake_id`` is ``None`` where the ID could not be read (the
-    caller reconciles against the expected 1..N set / user verification).
+    The box defines the flake region (so only flakes inside a box are used); the
+    ID is read from a crop directly above the box. Returns one
+    ``FlakeAnnotation`` per box; ``flake_id`` is ``None`` where the digit could
+    not be read (the caller reconciles vs the expected 1..N set / verification).
     """
     pytesseract = _import_pytesseract()
     ink = ink_mask(img, mark_bgr)
-    ink_n, ink_lab, ink_stats, _ = cv2.connectedComponentsWithStats(ink)
-    gsub = np.median(img[::40, ::40].reshape(-1, 3), axis=0).astype(np.float32)
-
-    # cluster box+number per flake; flakes are far apart so they stay separate
-    clustered = cv2.dilate(ink, np.ones((cluster_dilate, cluster_dilate), np.uint8))
-    n, clu_lab, stats, _cent = cv2.connectedComponentsWithStats(clustered)
-
     out: list[FlakeAnnotation] = []
-    for i in range(1, n):
-        x, y, w, h, area = stats[i]
-        if area < 4000:  # ignore stray specks that survived
-            continue
-        # flake location = largest non-substrate, non-ink blob inside the cluster
-        roi = img[y : y + h, x : x + w].astype(np.float32)
-        sub_ink = ink[y : y + h, x : x + w]
-        flake = ((np.linalg.norm(roi - gsub, axis=2) > color_thresh) & (sub_ink == 0)).astype(np.uint8)
-        flake = cv2.morphologyEx(flake, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        fn, _fl, fstats, fcent = cv2.connectedComponentsWithStats(flake)
-        best, best_a = None, 0
-        for j in range(1, fn):
-            if fstats[j][4] > best_a and fstats[j][4] >= 40:
-                best, best_a = j, fstats[j][4]
-        if best is None:
-            continue  # no flake in this cluster -> stray annotation, skip
-        fx, fy = int(fcent[best][0]) + x, int(fcent[best][1]) + y
-
-        # Separate the ID number from the box: the box surrounds the flake (its
-        # ink sits within ~half the box size of the flake centre); the number is
-        # offset. OCR only the ink away from the flake (the number).
-        near_r = max(60, int(0.7 * np.sqrt(best_a)))
-        number_mask = sub_ink.copy()
-        cv2.circle(number_mask, (fx - x, fy - y), near_r, 0, -1)  # erase the box
-        fid = _ocr_id(number_mask, pytesseract)
-        out.append(FlakeAnnotation(flake_id=fid, x=fx, y=fy))
-
-    # dedupe flakes that resolved to nearly the same location (split clusters)
-    deduped: list[FlakeAnnotation] = []
-    for a in out:
-        dup = next((b for b in deduped if np.hypot(a.x - b.x, a.y - b.y) < 300), None)
-        if dup is None:
-            deduped.append(a)
-        elif dup.flake_id is None and a.flake_id is not None:
-            dup.flake_id, dup.x, dup.y = a.flake_id, a.x, a.y
-    return deduped
+    for x, y, w, h in detect_boxes(img, mark_bgr):
+        # the ID number is written just above the box; crop that band and OCR it
+        band_h = max(int(2.2 * h), 200)
+        ry0, ry1 = max(0, y - band_h), y
+        rx0, rx1 = max(0, x - w // 2), x + w + w // 2
+        fid = _ocr_id(ink[ry0:ry1, rx0:rx1], pytesseract)
+        out.append(FlakeAnnotation(flake_id=fid, x=x, y=y, w=w, h=h))
+    return out
 
 
 def annotate_preview(
     img: np.ndarray, annotations: list[FlakeAnnotation], max_width: int = 1600
 ) -> np.ndarray:
-    """Draw detected flakes + their read IDs for the user to verify (RGB)."""
+    """Draw detected boxes + their read IDs for the user to verify (RGB)."""
     vis = img.copy()
     for a in annotations:
         label = str(a.flake_id) if a.flake_id is not None else "?"
-        cv2.circle(vis, (a.x, a.y), 60, (0, 0, 255), 6)
-        cv2.putText(vis, label, (a.x + 65, a.y), cv2.FONT_HERSHEY_SIMPLEX, 2.5, (0, 0, 255), 8)
+        cv2.rectangle(vis, (a.x, a.y), (a.x + a.w, a.y + a.h), (0, 0, 255), 6)
+        cv2.putText(vis, label, (a.x, a.y - 12), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (0, 0, 255), 7)
     h, w = img.shape[:2]
     vis = cv2.resize(vis, (max_width, int(max_width * h / w)))
     return cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)

@@ -14,7 +14,7 @@ from pathlib import Path
 import cv2
 
 from .annotations import FlakeAnnotation, read_flake_annotations
-from .sampling import snap_sample
+from .sampling import sample_box
 from .store import CalibrationRecord, CalibrationStore, flake_id
 
 
@@ -64,7 +64,7 @@ def build_from_id_mosaic(
         t = thicknesses.get(ann.flake_id) if ann.flake_id is not None else None
         added = False
         if t is not None:
-            res = snap_sample(img, ann.x, ann.y)
+            res = sample_box(img, ann.x, ann.y, ann.w, ann.h)
             if res is not None:
                 flake, sub = res
                 fid = flake_id(material, date, chip, ann.flake_id)
