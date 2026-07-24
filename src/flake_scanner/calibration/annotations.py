@@ -22,8 +22,11 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-# OpenCV-BGR of pure magenta; detection is by hue so exact value is not critical.
-MAGENTA_BGR = (255, 0, 255)
+# Detection is by hue, so exact BGR values aren't critical. Boxes and numbers
+# use two different colours, both absent from the samples, so each is isolated
+# independently (box detection never sees digit holes; OCR never sees box lines).
+MAGENTA_BGR = (255, 0, 255)  # boxes
+BLUE_BGR = (255, 0, 0)  # numbers
 
 
 @dataclass
@@ -64,13 +67,11 @@ def ink_mask(img: np.ndarray, mark_bgr: tuple[int, int, int] = MAGENTA_BGR, tol:
     lo = np.array([max(0, target_h - tol), 90, 90], np.uint8)
     hi = np.array([min(179, target_h + tol), 255, 255], np.uint8)
     m = cv2.inRange(hsv, lo, hi)
-    # drop tiny speckle
+    # drop tiny speckle (vectorised label lookup — fast even with many components)
     n, lab, stats, _ = cv2.connectedComponentsWithStats(m)
-    clean = np.zeros_like(m)
-    for i in range(1, n):
-        if stats[i][4] >= 60:
-            clean[lab == i] = 255
-    return clean
+    keep = stats[:, 4] >= 60
+    keep[0] = False  # background
+    return (keep[lab] * np.uint8(255)).astype(np.uint8)
 
 
 def _ocr_id(number_crop: np.ndarray, pytesseract) -> int | None:
@@ -94,18 +95,19 @@ def _ocr_id(number_crop: np.ndarray, pytesseract) -> int | None:
 
 def detect_boxes(
     img: np.ndarray,
-    mark_bgr: tuple[int, int, int] = MAGENTA_BGR,
+    box_bgr: tuple[int, int, int] = MAGENTA_BGR,
     min_box: int = 30,
     max_box: int = 320,
 ) -> list[tuple[int, int, int, int]]:
-    """Detect the magenta bounding boxes as ``(x, y, w, h)`` rectangles.
+    """Detect the box-colour bounding boxes as ``(x, y, w, h)`` rectangles.
 
-    HSV-filters the mark colour, reconnects fragmented lines, finds contours,
+    HSV-filters the box colour, reconnects fragmented lines, finds contours,
     and keeps the rectangular, hollow, box-sized ones (a box is hollow because
     the flake sits inside it). Nested/overlapping detections are deduped to the
-    innermost (tightest) box per flake.
+    one enclosing the most flake. Since numbers are a different colour, digit
+    holes are never mistaken for boxes.
     """
-    ink = ink_mask(img, mark_bgr)
+    ink = ink_mask(img, box_bgr)
     gsub = np.median(img[::40, ::40].reshape(-1, 3), axis=0).astype(np.float32)
     closed = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     cnts, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -137,24 +139,30 @@ def detect_boxes(
 
 def read_flake_annotations(
     img: np.ndarray,
-    mark_bgr: tuple[int, int, int] = MAGENTA_BGR,
+    box_bgr: tuple[int, int, int] = MAGENTA_BGR,
+    number_bgr: tuple[int, int, int] = BLUE_BGR,
 ) -> list[FlakeAnnotation]:
-    """Detect each magenta box and OCR the ID number written above it.
+    """Detect each box (box colour) and OCR the ID number (number colour) near it.
 
-    The box defines the flake region (so only flakes inside a box are used); the
-    ID is read from a crop directly above the box. Returns one
+    Boxes and numbers are different colours, so box detection and digit OCR are
+    fully decoupled. The box defines the flake region (only flakes inside a box
+    are used); the ID is the number-coloured text nearest the box. Returns one
     ``FlakeAnnotation`` per box; ``flake_id`` is ``None`` where the digit could
     not be read (the caller reconciles vs the expected 1..N set / verification).
     """
     pytesseract = _import_pytesseract()
-    ink = ink_mask(img, mark_bgr)
+    numbers = ink_mask(img, number_bgr)
     out: list[FlakeAnnotation] = []
-    for x, y, w, h in detect_boxes(img, mark_bgr):
-        # the ID number is written just above the box; crop that band and OCR it
-        band_h = max(int(2.2 * h), 200)
-        ry0, ry1 = max(0, y - band_h), y
-        rx0, rx1 = max(0, x - w // 2), x + w + w // 2
-        fid = _ocr_id(ink[ry0:ry1, rx0:rx1], pytesseract)
+    for x, y, w, h in detect_boxes(img, box_bgr):
+        # the ID is written next to the box (above by default); search a generous
+        # region around the box for number-coloured text and OCR it.
+        pad = max(w, h) + 60
+        ry0, ry1 = max(0, y - pad), min(numbers.shape[0], y + h + pad // 2)
+        rx0, rx1 = max(0, x - pad), min(numbers.shape[1], x + w + pad)
+        crop = numbers[ry0:ry1, rx0:rx1].copy()
+        # erase number-ink that falls inside the box (defensive; numbers sit outside)
+        cv2.rectangle(crop, (x - rx0, y - ry0), (x - rx0 + w, y - ry0 + h), 0, -1)
+        fid = _ocr_id(crop, pytesseract)
         out.append(FlakeAnnotation(flake_id=fid, x=x, y=y, w=w, h=h))
     return out
 

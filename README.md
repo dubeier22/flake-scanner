@@ -40,10 +40,11 @@ locally, so full-resolution mosaics never leave your machine.
 
 **1. Calibrate** — teach it what your target flakes look like. In any image
 editor, **draw a magenta (#FF00FF) box around each AFM-measured flake** and
-write a magenta **flake-ID number** (1, 2, 3, …) next to it — no connecting
-leader lines. Magenta is used because it is absent from the samples themselves
-(flakes are yellow/green/red/pink), so it isolates cleanly; red clashes with
-reddish flakes. Supply the thicknesses separately, in flake-ID order:
+write its **flake-ID number in blue (#0000FF)** next to it — no connecting
+leader lines. Two colours (both absent from the samples, which are
+yellow/green/red/pink) let the reader isolate boxes and numbers independently,
+so digit holes are never mistaken for boxes. Supply the thicknesses separately,
+in flake-ID order:
 
 ```bash
 flake-scanner calibrate --image chipA_annotated.jpg --db calib.csv \

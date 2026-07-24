@@ -120,9 +120,10 @@ def scan_tab() -> None:
 def calibrate_tab() -> None:
     st.header("Add calibration flakes")
     st.caption(
-        "In your image editor, draw a **magenta** box around each AFM-measured flake and "
-        "write its **flake-ID number** (1, 2, 3, …) next to the box (no connecting lines). "
-        "Enter the matching thicknesses below."
+        "In your image editor, draw a **magenta (#FF00FF) box** around each AFM-measured "
+        "flake and write its **flake-ID number in blue (#0000FF)** next to the box (no "
+        "connecting lines). Two colours keep the box and number from interfering. Enter "
+        "the matching thicknesses below."
     )
     db = st.text_input("Calibration database", value="calib_hbn.csv", key="cal_db")
     c1, c2, c3, c4 = st.columns(4)
