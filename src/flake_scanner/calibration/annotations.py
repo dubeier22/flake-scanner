@@ -60,11 +60,21 @@ def _import_pytesseract():
         ) from e
 
 
-def ink_mask(img: np.ndarray, mark_bgr: tuple[int, int, int] = MAGENTA_BGR, tol: int = 18) -> np.ndarray:
-    """Binary mask of the annotation ink, isolated by hue (robust to JPEG drift)."""
+def ink_mask(
+    img: np.ndarray,
+    mark_bgr: tuple[int, int, int] = MAGENTA_BGR,
+    tol: int = 18,
+    min_sat: int = 90,
+) -> np.ndarray:
+    """Binary mask of the annotation ink, isolated by hue (robust to JPEG drift).
+
+    ``min_sat`` sets the saturation floor. Raise it for a colour that shares a
+    hue with the (desaturated) substrate — e.g. blue numbers vs the blue-grey
+    substrate — so only the fully-saturated ink survives.
+    """
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     target_h = int(cv2.cvtColor(np.uint8([[mark_bgr]]), cv2.COLOR_BGR2HSV)[0, 0, 0])
-    lo = np.array([max(0, target_h - tol), 90, 90], np.uint8)
+    lo = np.array([max(0, target_h - tol), min_sat, 90], np.uint8)
     hi = np.array([min(179, target_h + tol), 255, 255], np.uint8)
     m = cv2.inRange(hsv, lo, hi)
     # drop tiny speckle (vectorised label lookup — fast even with many components)
@@ -97,7 +107,7 @@ def detect_boxes(
     img: np.ndarray,
     box_bgr: tuple[int, int, int] = MAGENTA_BGR,
     min_box: int = 30,
-    max_box: int = 320,
+    max_box: int = 550,
 ) -> list[tuple[int, int, int, int]]:
     """Detect the box-colour bounding boxes as ``(x, y, w, h)`` rectangles.
 
@@ -151,7 +161,8 @@ def read_flake_annotations(
     not be read (the caller reconciles vs the expected 1..N set / verification).
     """
     pytesseract = _import_pytesseract()
-    numbers = ink_mask(img, number_bgr)
+    # high saturation floor: blue numbers vs the desaturated blue-grey substrate
+    numbers = ink_mask(img, number_bgr, min_sat=180)
     out: list[FlakeAnnotation] = []
     for x, y, w, h in detect_boxes(img, box_bgr):
         # the ID is written next to the box (above by default); search a generous
@@ -162,7 +173,24 @@ def read_flake_annotations(
         crop = numbers[ry0:ry1, rx0:rx1].copy()
         # erase number-ink that falls inside the box (defensive; numbers sit outside)
         cv2.rectangle(crop, (x - rx0, y - ry0), (x - rx0 + w, y - ry0 + h), 0, -1)
-        fid = _ocr_id(crop, pytesseract)
+        # keep only the number cluster nearest the box, then crop tight so the
+        # digit fills the frame (OCR needs the number upscaled, not the region)
+        cn, clab, cstats, ccent = cv2.connectedComponentsWithStats(crop)
+        digits = [k for k in range(1, cn) if cstats[k][4] >= 40]
+        if digits:
+            bcx, bcy = (x + w // 2) - rx0, (y + h // 2) - ry0
+            anchor = min(digits, key=lambda k: np.hypot(ccent[k][0] - bcx, ccent[k][1] - bcy))
+            ax, ay = ccent[anchor]
+            group = [k for k in digits if abs(ccent[k][1] - ay) < 1.0 * cstats[anchor][3]
+                     and abs(ccent[k][0] - ax) < 4.0 * cstats[anchor][2]]
+            gx0 = min(cstats[k][0] for k in group)
+            gy0 = min(cstats[k][1] for k in group)
+            gx1 = max(cstats[k][0] + cstats[k][2] for k in group)
+            gy1 = max(cstats[k][1] + cstats[k][3] for k in group)
+            tight = crop[gy0:gy1, gx0:gx1]
+        else:
+            tight = crop
+        fid = _ocr_id(tight, pytesseract)
         out.append(FlakeAnnotation(flake_id=fid, x=x, y=y, w=w, h=h))
     return out
 
