@@ -150,12 +150,21 @@ def calibrate_tab() -> None:
     anns_state = st.session_state.get("cal_anns")
     if anns_state and st.session_state.get("cal_image") == image:
         anns = [FlakeAnnotation(fid, x, y, w, h) for fid, x, y, w, h in anns_state]
-        st.write(f"**Detected {len(anns)} flakes.** Check/fix the IDs, then save.")
-        st.image(annotate_preview(cv2.imread(image), anns), caption="Detected boxes (ID shown)",
+        st.write(
+            f"**Detected {len(anns)} flakes**, listed top-to-bottom. Each box on the map is "
+            "labelled `position: ID` — check the ID against your blue number and fix it here."
+        )
+        st.image(annotate_preview(cv2.imread(image), anns), caption="Detected boxes (position: ID)",
                  use_container_width=True)
-        df = pd.DataFrame([{"detected_id": a.flake_id, "x": a.x, "y": a.y, "w": a.w, "h": a.h} for a in anns])
-        edited = st.data_editor(df, use_container_width=True, hide_index=True, key="cal_edit",
-                                column_config={"x": None, "y": None, "w": None, "h": None})
+        df = pd.DataFrame(
+            [{"position": i, "detected_id": a.flake_id, "x": a.x, "y": a.y, "w": a.w, "h": a.h}
+             for i, a in enumerate(anns, start=1)]
+        )
+        edited = st.data_editor(
+            df, use_container_width=True, hide_index=True, key="cal_edit",
+            column_config={"position": st.column_config.NumberColumn(disabled=True),
+                           "x": None, "y": None, "w": None, "h": None},
+        )
         if st.button("Save to database", type="primary"):
             tmap = {i: float(v) for i, v in enumerate(thick_str.split(","), 1) if v.strip()}
             fixed = [

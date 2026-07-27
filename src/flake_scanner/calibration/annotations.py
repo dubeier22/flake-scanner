@@ -192,16 +192,23 @@ def read_flake_annotations(
             tight = crop
         fid = _ocr_id(tight, pytesseract)
         out.append(FlakeAnnotation(flake_id=fid, x=x, y=y, w=w, h=h))
+    # list top-to-bottom (then left-to-right) so table rows map to the map
+    out.sort(key=lambda a: (a.cy, a.cx))
     return out
 
 
 def annotate_preview(
     img: np.ndarray, annotations: list[FlakeAnnotation], max_width: int = 1600
 ) -> np.ndarray:
-    """Draw detected boxes + their read IDs for the user to verify (RGB)."""
+    """Draw detected boxes with their position number and read ID (RGB).
+
+    Each box is labelled ``pos: id`` where ``pos`` is the row's position in the
+    top-to-bottom list (matching the verification table) and ``id`` is the OCR'd
+    flake ID (``?`` if unread), so a table row maps to a specific box.
+    """
     vis = img.copy()
-    for a in annotations:
-        label = str(a.flake_id) if a.flake_id is not None else "?"
+    for pos, a in enumerate(annotations, start=1):
+        label = f"{pos}: {a.flake_id if a.flake_id is not None else '?'}"
         cv2.rectangle(vis, (a.x, a.y), (a.x + a.w, a.y + a.h), (0, 0, 255), 6)
         cv2.putText(vis, label, (a.x, a.y - 12), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (0, 0, 255), 7)
     h, w = img.shape[:2]
